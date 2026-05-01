@@ -107,16 +107,9 @@ static void removeStaleBuildArtifacts(const fs::path& root) {
 // ---------- main ----------
 
 int main() {
-    crow::App<crow::CORSHandler> app;
-
-    // ---- CORS ----
-    // FIX: use exact origin instead of wildcard so Authorization header
-    // and future credentialed requests work correctly in all browsers.
-    auto& cors = app.get_middleware<crow::CORSHandler>();
-    cors.global()
-        .headers("Content-Type", "Authorization", "Accept")
-        .methods("POST"_method, "GET"_method, "OPTIONS"_method)
-        .origin("*");
+    // FIX: Use SimpleApp — CORS headers injected manually per route
+    // for guaranteed delivery instead of relying on CORSHandler middleware.
+    crow::SimpleApp app;
 
     // Working directory for source files and binaries.
     fs::path workDir = fs::temp_directory_path() / "auto_doc_engine";
@@ -128,47 +121,65 @@ int main() {
         return 1;
     }
 
+    // ---- Root route (Railway health check) ----
+    CROW_ROUTE(app, "/").methods("GET"_method)([]() {
+        return crow::response(200, "OK");
+    });
+
     // ---- Health check ----
     CROW_ROUTE(app, "/api/health").methods("GET"_method, "OPTIONS"_method)
     ([](const crow::request& req) {
-        // FIX: handle OPTIONS preflight on every route
+        crow::response res;
+        res.add_header("Access-Control-Allow-Origin", "*");
+        res.add_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        res.add_header("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept");
+
         if (req.method == crow::HTTPMethod::Options) {
-            return crow::response(204);
+            res.code = 204;
+            return res;
         }
-        crow::json::wvalue res;
-        res["status"]       = "ok";
-        res["service"]      = "Auto-Doc Engine C++ API";
-        res["compiler"]     = LOCKED_COMPILER_PATH;
-        res["compileFlags"] = LOCKED_COMPILE_FLAGS;
-        return crow::response(200, res);
+
+        crow::json::wvalue body;
+        body["status"]       = "ok";
+        body["service"]      = "Auto-Doc Engine C++ API";
+        body["compiler"]     = LOCKED_COMPILER_PATH;
+        body["compileFlags"] = LOCKED_COMPILE_FLAGS;
+        res.code = 200;
+        res.body = body.dump();
+        res.add_header("Content-Type", "application/json");
+        return res;
     });
 
-    CROW_ROUTE(app, "/").methods("GET"_method)([]() {
-    return crow::response(200, "OK");
-});
-
     // ---- Compile + run ----
-    // FIX: added OPTIONS"_method so the browser preflight gets a 204
-    // instead of a 404 — this was the root cause of the CORS block.
     CROW_ROUTE(app, "/api/compile").methods("POST"_method, "OPTIONS"_method)
     ([&workDir](const crow::request& req) {
+        crow::response res;
+        res.add_header("Access-Control-Allow-Origin", "*");
+        res.add_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        res.add_header("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept");
 
-        // FIX: short-circuit OPTIONS preflight immediately.
-        // Crow's CORSHandler will attach the Access-Control-* headers.
+        // Handle preflight immediately.
         if (req.method == crow::HTTPMethod::Options) {
-            return crow::response(204);
+            res.code = 204;
+            return res;
         }
 
         auto body = crow::json::load(req.body);
         if (!body) {
             crow::json::wvalue err;
             err["error"] = "Invalid JSON body.";
-            return crow::response(400, err);
+            res.code = 400;
+            res.body = err.dump();
+            res.add_header("Content-Type", "application/json");
+            return res;
         }
         if (!body.has("files") || body["files"].size() == 0) {
             crow::json::wvalue err;
             err["error"] = "No files provided in 'files' array.";
-            return crow::response(400, err);
+            res.code = 400;
+            res.body = err.dump();
+            res.add_header("Content-Type", "application/json");
+            return res;
         }
 
         const std::string stdinData =
@@ -301,15 +312,15 @@ int main() {
         crow::json::wvalue response;
         response["totalFiles"] = static_cast<int>(fileCount);
         response["results"]    = std::move(resultsArr);
-        return crow::response(200, response);
+        res.code = 200;
+        res.body = response.dump();
+        res.add_header("Content-Type", "application/json");
+        return res;
     });
 
-    // ---- FIX: read Railway's dynamic $PORT instead of hardcoding 18080 ----
-    // Railway assigns a random port at container startup via the $PORT env var.
-    // Hardcoding 18080 means Railway's router can't reach your process,
-    // causing every request to fail even though the URL resolves correctly.
+    // ---- Read Railway's dynamic $PORT ----
     const char* port_env = std::getenv("PORT");
-    uint16_t port = port_env ? static_cast<uint16_t>(std::stoi(port_env)) : 18080;
+    uint16_t port = port_env ? static_cast<uint16_t>(std::stoi(port_env)) : 8080;
 
     std::cout << "===========================================" << std::endl;
     std::cout << " Auto-Doc Engine — C++ API (Crow)"            << std::endl;
