@@ -136,7 +136,7 @@ int main() {
     ([](const crow::request& req) {
         crow::response res;
         res.add_header("Access-Control-Allow-Origin", "*");
-        if (req.method == crow::HTTPMethod::Options) { res.code = 204; return res; }
+        if (req.method == crow::HTTPMethod::Options) { res.code = 200; return res; }
 
         crow::json::wvalue body;
         body["status"] = "ok";
@@ -155,7 +155,7 @@ int main() {
         res.add_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
         res.add_header("Access-Control-Allow-Headers", "Content-Type");
         
-        if (req.method == crow::HTTPMethod::Options) { res.code = 204; return res; }
+        if (req.method == crow::HTTPMethod::Options) { res.code = 200; return res; }
         
         if (req.method != crow::HTTPMethod::Post) {
             res.code = 405;
