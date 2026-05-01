@@ -1,3 +1,0 @@
-"C:\Program Files\CMake\bin\cmake.exe" -E rm -f CMakeFiles\auto_doc_engine.dir/objects.a
-C:\mingw64-new\bin\ar.exe qc CMakeFiles\auto_doc_engine.dir/objects.a @CMakeFiles\auto_doc_engine.dir\objects1.rsp
-C:\mingw64-new\bin\g++.exe  -m64  -static-libgcc -static-libstdc++ -static -lpthread -Wl,--gc-sections -Wl,--allow-multiple-definition -Wl,--whole-archive CMakeFiles\auto_doc_engine.dir/objects.a -Wl,--no-whole-archive -o auto_doc_engine.exe -Wl,--out-implib,libauto_doc_engine.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles\auto_doc_engine.dir\linkLibs.rsp
