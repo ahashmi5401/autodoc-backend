@@ -10,6 +10,20 @@
  */
 
 #include "crow.h"
+
+struct CustomCORS {
+    struct context {};
+    void before_handle(crow::request&, crow::response&, context&) {}
+    void after_handle(crow::request& req, crow::response& res, context&) {
+        res.add_header("Access-Control-Allow-Origin", "*");
+        res.add_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+        res.add_header("Access-Control-Allow-Headers", "Content-Type, Accept, Origin");
+        if (req.method == crow::HTTPMethod::Options) {
+            res.code = 200;
+        }
+    }
+};
+
 #include <array>
 #include <chrono>
 #include <cstdio>
@@ -118,7 +132,7 @@ static std::string quote(const std::string& s) {
 // ---------- API Logic ----------
 
 int main() {
-    crow::SimpleApp app;
+    crow::App<CustomCORS> app;
 
     // Base directory context
     const fs::path baseWorkDir = fs::temp_directory_path() / "auto_doc_engine";
@@ -134,40 +148,27 @@ int main() {
     // ---- Health Check ----
     CROW_ROUTE(app, "/api/health").methods("GET"_method, "OPTIONS"_method)
     ([](const crow::request& req) {
-        crow::response res;
-        res.add_header("Access-Control-Allow-Origin", "*");
-        if (req.method == crow::HTTPMethod::Options) { res.code = 200; return res; }
+        if (req.method == crow::HTTPMethod::Options) { return crow::response(200); }
 
         crow::json::wvalue body;
         body["status"] = "ok";
         body["service"] = "Auto-Doc Engine C++ Production API";
         body["security"] = "Isolated WorkDirs + POSIX Decoding + Sandbox Active";
-        res.code = 200;
-        res.body = body.dump();
-        return res;
+        return crow::response(200, body);
     });
 
     // ---- Compile + Execute ----
     CROW_ROUTE(app, "/api/compile").methods("POST"_method, "OPTIONS"_method)
     ([&baseWorkDir](const crow::request& req) {
-        crow::response res;
-        res.add_header("Access-Control-Allow-Origin", "*");
-        res.add_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-        res.add_header("Access-Control-Allow-Headers", "Content-Type");
-        
-        if (req.method == crow::HTTPMethod::Options) { res.code = 200; return res; }
+        if (req.method == crow::HTTPMethod::Options) { return crow::response(200); }
         
         if (req.method != crow::HTTPMethod::Post) {
-            res.code = 405;
-            res.body = "Method Not Allowed";
-            return res;
+            return crow::response(405, "Method Not Allowed");
         }
 
         auto body = crow::json::load(req.body);
         if (!body) {
-            res.code = 400;
-            res.body = "Invalid JSON";
-            return res;
+            return crow::response(400, "Invalid JSON");
         }
 
         // RULE: Each request gets a unique folder to prevent concurrent overwrites.
