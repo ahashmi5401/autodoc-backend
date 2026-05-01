@@ -116,7 +116,7 @@ int main() {
     cors.global()
         .headers("Content-Type", "Authorization", "Accept")
         .methods("POST"_method, "GET"_method, "OPTIONS"_method)
-        .origin("http://localhost:5173");
+        .origin("*");
 
     // Working directory for source files and binaries.
     fs::path workDir = fs::temp_directory_path() / "auto_doc_engine";
