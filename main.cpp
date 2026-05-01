@@ -30,7 +30,6 @@ namespace fs = std::filesystem;
     static const std::string EXE_EXT = "";
 #endif
 
-// FIXED: use system g++ instead of hardcoded Windows path
 static const std::string LOCKED_COMPILER_PATH = "g++";
 static const std::string LOCKED_COMPILE_FLAGS = "-std=c++17 -O2 -Wall -Wextra";
 
@@ -40,7 +39,6 @@ static std::string runCommand(const std::string& cmd, int& exitCode) {
     std::array<char, 4096> buffer{};
     std::string output;
 
-    // Merge stderr into stdout so we surface compile errors and runtime errors.
     std::string fullCmd = cmd + " 2>&1";
 
     FILE* pipe = PIPE_OPEN(fullCmd.c_str(), "r");
@@ -93,9 +91,9 @@ static std::string toShellPath(const fs::path& p) {
 
 static void removeStaleBuildArtifacts(const fs::path& root) {
     std::error_code ec;
-    const fs::path outDir = root / "out";
+    const fs::path outDir  = root / "out";
     const fs::path tempDir = root / "temp";
-    if (fs::exists(outDir, ec)) fs::remove_all(outDir, ec);
+    if (fs::exists(outDir,  ec)) fs::remove_all(outDir,  ec);
     if (fs::exists(tempDir, ec)) fs::remove_all(tempDir, ec);
 
     for (const auto& entry : fs::directory_iterator(root, ec)) {
@@ -111,12 +109,14 @@ static void removeStaleBuildArtifacts(const fs::path& root) {
 int main() {
     crow::App<crow::CORSHandler> app;
 
-    // Open CORS so the React dev server (Vite, port 5173) can reach us.
+    // ---- CORS ----
+    // FIX: use exact origin instead of wildcard so Authorization header
+    // and future credentialed requests work correctly in all browsers.
     auto& cors = app.get_middleware<crow::CORSHandler>();
     cors.global()
         .headers("Content-Type", "Authorization", "Accept")
         .methods("POST"_method, "GET"_method, "OPTIONS"_method)
-        .origin("*");
+        .origin("http://localhost:5173");
 
     // Working directory for source files and binaries.
     fs::path workDir = fs::temp_directory_path() / "auto_doc_engine";
@@ -129,18 +129,32 @@ int main() {
     }
 
     // ---- Health check ----
-    CROW_ROUTE(app, "/api/health").methods("GET"_method)([]() {
+    CROW_ROUTE(app, "/api/health").methods("GET"_method, "OPTIONS"_method)
+    ([](const crow::request& req) {
+        // FIX: handle OPTIONS preflight on every route
+        if (req.method == crow::HTTPMethod::Options) {
+            return crow::response(204);
+        }
         crow::json::wvalue res;
-        res["status"] = "ok";
-        res["service"] = "Auto-Doc Engine C++ API";
-        res["compiler"] = LOCKED_COMPILER_PATH;
+        res["status"]       = "ok";
+        res["service"]      = "Auto-Doc Engine C++ API";
+        res["compiler"]     = LOCKED_COMPILER_PATH;
         res["compileFlags"] = LOCKED_COMPILE_FLAGS;
-        return res;
+        return crow::response(200, res);
     });
 
     // ---- Compile + run ----
-    CROW_ROUTE(app, "/api/compile").methods("POST"_method)
+    // FIX: added OPTIONS"_method so the browser preflight gets a 204
+    // instead of a 404 — this was the root cause of the CORS block.
+    CROW_ROUTE(app, "/api/compile").methods("POST"_method, "OPTIONS"_method)
     ([&workDir](const crow::request& req) {
+
+        // FIX: short-circuit OPTIONS preflight immediately.
+        // Crow's CORSHandler will attach the Access-Control-* headers.
+        if (req.method == crow::HTTPMethod::Options) {
+            return crow::response(204);
+        }
+
         auto body = crow::json::load(req.body);
         if (!body) {
             crow::json::wvalue err;
@@ -156,7 +170,6 @@ int main() {
         const std::string stdinData =
             body.has("input") ? std::string(body["input"].s()) : std::string{};
 
-        // Prevent accidental reuse of stale build artifacts from legacy runs.
         removeStaleBuildArtifacts(workDir);
 
         std::vector<crow::json::wvalue> resultsArr;
@@ -175,33 +188,33 @@ int main() {
             filename = sanitizeFilename(filename);
 
             crow::json::wvalue r;
-            r["filename"] = filename;
+            r["filename"]   = filename;
             r["sourceCode"] = code;
 
             if (code.empty()) {
-                r["success"] = false;
-                r["stage"] = "input";
-                r["error"] = "Empty source code.";
+                r["success"]       = false;
+                r["stage"]         = "input";
+                r["error"]         = "Empty source code.";
                 r["compileOutput"] = "";
-                r["runOutput"] = "";
+                r["runOutput"]     = "";
                 resultsArr.push_back(std::move(r));
                 continue;
             }
 
-            const std::string id = generateUniqueId();
-            const fs::path sourcePath = workDir / (id + ".cpp");
-            const fs::path binaryPath = workDir / (id + EXE_EXT);
-            const fs::path stdinPath  = workDir / (id + ".in");
+            const std::string id         = generateUniqueId();
+            const fs::path    sourcePath = workDir / (id + ".cpp");
+            const fs::path    binaryPath = workDir / (id + EXE_EXT);
+            const fs::path    stdinPath  = workDir / (id + ".in");
 
-            // Write the source file.
+            // Write source file.
             {
                 std::ofstream ofs(sourcePath, std::ios::binary);
                 if (!ofs) {
-                    r["success"] = false;
-                    r["stage"] = "io";
-                    r["error"] = "Cannot write source file to disk.";
+                    r["success"]       = false;
+                    r["stage"]         = "io";
+                    r["error"]         = "Cannot write source file to disk.";
                     r["compileOutput"] = "";
-                    r["runOutput"] = "";
+                    r["runOutput"]     = "";
                     resultsArr.push_back(std::move(r));
                     continue;
                 }
@@ -217,7 +230,8 @@ int main() {
             // Compile.
             const std::string compileCmd =
                 LOCKED_COMPILER_PATH + " " + LOCKED_COMPILE_FLAGS + " " +
-                quote(toShellPath(sourcePath)) + " -o " + quote(toShellPath(binaryPath));
+                quote(toShellPath(sourcePath)) + " -o " +
+                quote(toShellPath(binaryPath));
 
             const auto compileStart = std::chrono::steady_clock::now();
             int compileExit = 0;
@@ -227,13 +241,13 @@ int main() {
                 std::chrono::duration<double>(compileEnd - compileStart).count();
 
             r["compileOutput"] = compileOutput;
-            r["compileTime"] = compileTime;
+            r["compileTime"]   = compileTime;
 
             const bool compiled = (compileExit == 0) && fs::exists(binaryPath);
             if (!compiled) {
-                r["success"] = false;
-                r["stage"] = "compile";
-                r["error"] = "Compilation failed.";
+                r["success"]   = false;
+                r["stage"]     = "compile";
+                r["error"]     = "Compilation failed.";
                 r["runOutput"] = "";
                 std::error_code rmEc;
                 fs::remove(sourcePath, rmEc);
@@ -260,11 +274,11 @@ int main() {
             const double runTime =
                 std::chrono::duration<double>(runEnd - runStart).count();
 
-            r["runOutput"] = runOutput;
+            r["runOutput"]     = runOutput;
             r["executionTime"] = runTime;
-            r["exitCode"] = runExit;
-            r["success"] = (runExit == 0);
-            r["stage"] = "run";
+            r["exitCode"]      = runExit;
+            r["success"]       = (runExit == 0);
+            r["stage"]         = "run";
             if (runExit != 0) {
                 r["error"] = (runExit == 124 || runExit == 31744)
                     ? "Execution exceeded 5 second time limit."
@@ -282,17 +296,24 @@ int main() {
 
         crow::json::wvalue response;
         response["totalFiles"] = static_cast<int>(fileCount);
-        response["results"] = std::move(resultsArr);
+        response["results"]    = std::move(resultsArr);
         return crow::response(200, response);
     });
 
+    // ---- FIX: read Railway's dynamic $PORT instead of hardcoding 18080 ----
+    // Railway assigns a random port at container startup via the $PORT env var.
+    // Hardcoding 18080 means Railway's router can't reach your process,
+    // causing every request to fail even though the URL resolves correctly.
+    const char* port_env = std::getenv("PORT");
+    uint16_t port = port_env ? static_cast<uint16_t>(std::stoi(port_env)) : 18080;
+
     std::cout << "===========================================" << std::endl;
     std::cout << " Auto-Doc Engine — C++ API (Crow)"            << std::endl;
-    std::cout << " Listening on   : http://0.0.0.0:18080"       << std::endl;
+    std::cout << " Listening on   : http://0.0.0.0:" << port    << std::endl;
     std::cout << " Compile route  : POST /api/compile"          << std::endl;
     std::cout << " Health route   : GET  /api/health"           << std::endl;
     std::cout << "===========================================" << std::endl;
 
-    app.bindaddr("0.0.0.0").port(18080).multithreaded().run();
+    app.bindaddr("0.0.0.0").port(port).multithreaded().run();
     return 0;
 }
