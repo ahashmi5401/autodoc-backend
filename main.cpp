@@ -258,8 +258,7 @@ int main() {
         crow::json::wvalue resBody;
         resBody["requestId"] = requestId;
         resBody["results"] = std::move(resultsArr);
-        res.body = resBody.dump();
-        return res;
+        return crow::response{resBody.dump()};
     });
 
     // Railway Compatibility: Bind to dynamic $PORT or 18080 default
