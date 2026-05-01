@@ -143,6 +143,10 @@ int main() {
         return crow::response(200, res);
     });
 
+    CROW_ROUTE(app, "/").methods("GET"_method)([]() {
+    return crow::response(200, "OK");
+});
+
     // ---- Compile + run ----
     // FIX: added OPTIONS"_method so the browser preflight gets a 204
     // instead of a 404 — this was the root cause of the CORS block.
