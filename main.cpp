@@ -1,6 +1,12 @@
 /**
  * main.cpp — Auto-Doc Engine C++ API (Crow)
- * Compliance: Isolated WorkDirs, POSIX decoding, prlimit, robust IDs.
+ * 
+ * IMPLEMENTATION LOGIC:
+ * 1. Isolated WorkDirs: Each request creates a unique folder to prevent race conditions.
+ * 2. Robust IDs: Combines timestamp, PID, and a 64-bit random number.
+ * 3. POSIX Standards: Decodes exit codes and signals (Segfaults, etc.) correctly.
+ * 4. Sandbox: Enforces resource limits via 'timeout' and 'prlimit'.
+ * 5. Manual CORS: Injects headers manually for reliable frontend connectivity.
  */
 
 #include "crow.h"
@@ -34,11 +40,16 @@ namespace fs = std::filesystem;
     static const std::string EXE_EXT = "";
 #endif
 
+// ---------- Configuration ----------
 static const std::string LOCKED_COMPILER_PATH = "g++";
 static const std::string LOCKED_COMPILE_FLAGS = "-std=c++17 -O2 -Wall -Wextra";
 
-// ---------- helpers ----------
+// ---------- Helpers ----------
 
+/**
+ * Runs a shell command and returns stdout/stderr combined.
+ * Captures the raw wait status for POSIX decoding.
+ */
 static std::string runCommand(const std::string& cmd, int& waitStatus) {
     std::array<char, 4096> buffer{};
     std::string output;
@@ -56,6 +67,9 @@ static std::string runCommand(const std::string& cmd, int& waitStatus) {
     return output;
 }
 
+/**
+ * Decodes POSIX wait status into a meaningful exit code or signal.
+ */
 static int decodeStatus(int status) {
 #ifndef _WIN32
     if (WIFEXITED(status)) return WEXITSTATUS(status);
@@ -64,6 +78,9 @@ static int decodeStatus(int status) {
     return status;
 }
 
+/**
+ * Generates a collision-resistant ID to ensure thread-safety and isolation.
+ */
 static std::string generateRobustId() {
     static std::random_device rd;
     static std::mt19937_64 gen(rd());
@@ -77,6 +94,9 @@ static std::string generateRobustId() {
     return ss.str();
 }
 
+/**
+ * Sanitizes filenames to prevent path traversal or shell injection.
+ */
 static std::string sanitizeFilename(const std::string& raw) {
     std::string out;
     out.reserve(raw.size());
@@ -95,15 +115,17 @@ static std::string quote(const std::string& s) {
     return "\"" + s + "\"";
 }
 
+// ---------- API Logic ----------
+
 int main() {
     crow::SimpleApp app;
 
-    // Base work dir config
+    // Base directory context
     const fs::path baseWorkDir = fs::temp_directory_path() / "auto_doc_engine";
     std::error_code ec;
     fs::create_directories(baseWorkDir, ec);
 
-    // ---- Health check ----
+    // ---- Health Check ----
     CROW_ROUTE(app, "/api/health").methods("GET"_method, "OPTIONS"_method)
     ([](const crow::request& req) {
         crow::response res;
@@ -112,23 +134,27 @@ int main() {
 
         crow::json::wvalue body;
         body["status"] = "ok";
-        body["security"] = "Hardened (Isolated WorkDirs + Resource Limits)";
+        body["service"] = "Auto-Doc Engine C++ Production API";
+        body["security"] = "Isolated WorkDirs + POSIX Decoding + Sandbox Active";
         res.code = 200;
         res.body = body.dump();
         return res;
     });
 
-    // ---- Compile + run ----
+    // ---- Compile + Execute ----
     CROW_ROUTE(app, "/api/compile").methods("POST"_method, "OPTIONS"_method)
     ([&baseWorkDir](const crow::request& req) {
         crow::response res;
         res.add_header("Access-Control-Allow-Origin", "*");
+        res.add_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+        res.add_header("Access-Control-Allow-Headers", "Content-Type");
+        
         if (req.method == crow::HTTPMethod::Options) { res.code = 204; return res; }
 
         auto body = crow::json::load(req.body);
         if (!body) return crow::response(400, "Invalid JSON");
 
-        // CRITICAL FIX: Every request gets its OWN unique subdirectory
+        // RULE: Each request gets a unique folder to prevent concurrent overwrites.
         std::string requestId = generateRobustId();
         fs::path requestDir = baseWorkDir / requestId;
         fs::create_directories(requestDir);
@@ -148,17 +174,28 @@ int main() {
                 fs::path binaryPath = requestDir / (filename + ".bin");
                 fs::path stdinPath  = requestDir / "stdin.txt";
 
+                // Write assets to unique directory
                 {
                     std::ofstream ofs(sourcePath);
                     ofs << code;
                 }
-                if (!stdinData.empty()) { std::ofstream ofs(stdinPath); ofs << stdinData; }
+                if (!stdinData.empty()) {
+                    std::ofstream ofs(stdinPath);
+                    ofs << stdinData;
+                }
 
-                // Compile
+                // Stage 1: Compilation
                 int compileStatus = 0;
-                std::string compileOutput = runCommand("g++ -std=c++17 -O2 -Wall -Wextra " + quote(sourcePath.string()) + " -o " + quote(binaryPath.string()), compileStatus);
+                std::string compileCmd = LOCKED_COMPILER_PATH + " " + LOCKED_COMPILE_FLAGS + " " + 
+                                         quote(sourcePath.string()) + " -o " + quote(binaryPath.string());
+                
+                auto cStart = std::chrono::steady_clock::now();
+                std::string compileOutput = runCommand(compileCmd, compileStatus);
+                auto cEnd = std::chrono::steady_clock::now();
                 
                 r["compileOutput"] = compileOutput;
+                r["compileTime"] = std::chrono::duration<double>(cEnd - cStart).count();
+
                 if (decodeStatus(compileStatus) != 0) {
                     r["success"] = false;
                     r["error"] = "Compilation failed";
@@ -166,11 +203,13 @@ int main() {
                     continue;
                 }
 
-                // Run with Sandbox Limits
-                // FIX: Added timeout and prlimit (Linux)
+                // Stage 2: Sandbox Execution
+                // RULE: Use timeout and prlimit for RAM (512MB), CPU (5s), and File limits (10MB).
                 std::string runCmd;
 #ifndef _WIN32
                 runCmd = "timeout -k 1 5s prlimit --as=536870912 --nproc=1 --fsize=10485760 ";
+#else
+                runCmd = "";
 #endif
                 runCmd += quote(binaryPath.string());
                 if (!stdinData.empty()) runCmd += " < " + quote(stdinPath.string());
@@ -188,25 +227,29 @@ int main() {
 
                 if (exitCode != 0) {
                     if (exitCode == 124) r["error"] = "Time limit exceeded (5s)";
-                    else if (exitCode > 128) r["error"] = "Program crashed (Signal " + std::to_string(exitCode - 128) + ")";
-                    else r["error"] = "Non-zero exit code";
+                    else if (exitCode > 128) r["error"] = "Process crashed (Signal " + std::to_string(exitCode - 128) + ")";
+                    else r["error"] = "Program exited with non-zero status";
                 }
 
                 resultsArr.push_back(std::move(r));
             }
         }
 
-        // Cleanup this specific request's folder
+        // RULE: Self-contained cleanup to remove request artifacts.
         fs::remove_all(requestDir);
 
-        crow::json::wvalue response;
-        response["results"] = std::move(resultsArr);
-        res.body = response.dump();
+        crow::json::wvalue resBody;
+        resBody["requestId"] = requestId;
+        resBody["results"] = std::move(resultsArr);
+        res.body = resBody.dump();
         return res;
     });
 
+    // Railway Compatibility: Bind to dynamic $PORT or 18080 default
     const char* port_env = std::getenv("PORT");
     uint16_t port = port_env ? static_cast<uint16_t>(std::stoi(port_env)) : 18080;
+    
+    std::cout << "Auto-Doc Engine (Hardened) listening on 0.0.0.0:" << port << std::endl;
     app.bindaddr("0.0.0.0").port(port).multithreaded().run();
     return 0;
 }
