@@ -112,6 +112,13 @@ int main() {
     crow::SimpleApp app;
 
     // Working directory for source files and binaries.
+    CROW_ROUTE(app, "/").methods("GET"_method, "OPTIONS"_method)([]() {
+    crow::response res(200, "OK");
+    res.add_header("Access-Control-Allow-Origin", "*");
+    res.add_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.add_header("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept");
+    return res;
+});
     fs::path workDir = fs::temp_directory_path() / "auto_doc_engine";
     std::error_code ec;
     fs::create_directories(workDir, ec);
@@ -320,7 +327,7 @@ int main() {
 
     // ---- Read Railway's dynamic $PORT ----
     const char* port_env = std::getenv("PORT");
-    uint16_t port = port_env ? static_cast<uint16_t>(std::stoi(port_env)) : 8080;
+    uint16_t port = port_env ? static_cast<uint16_t>(std::stoi(port_env)) : 18080;
 
     std::cout << "===========================================" << std::endl;
     std::cout << " Auto-Doc Engine — C++ API (Crow)"            << std::endl;
