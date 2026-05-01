@@ -10,6 +10,7 @@
  */
 
 #include "crow.h"
+#include "crow/middlewares/cors.h"
 #include <array>
 #include <chrono>
 #include <cstdio>
@@ -118,7 +119,13 @@ static std::string quote(const std::string& s) {
 // ---------- API Logic ----------
 
 int main() {
-    crow::SimpleApp app;
+    crow::App<crow::CORSHandler> app;
+
+    auto& cors = app.get_middleware<crow::CORSHandler>();
+    cors.global()
+        .headers("Content-Type", "Accept", "Origin")
+        .methods("POST"_method, "GET"_method, "OPTIONS"_method)
+        .origin("*");
 
     // Base directory context
     const fs::path baseWorkDir = fs::temp_directory_path() / "auto_doc_engine";
@@ -132,37 +139,20 @@ int main() {
     });
 
     // ---- Health Check ----
-    CROW_ROUTE(app, "/api/health").methods("GET"_method, "OPTIONS"_method)
-    ([](const crow::request& req) {
-        crow::response res;
-        res.add_header("Access-Control-Allow-Origin", "*");
-        if (req.method == crow::HTTPMethod::Options) { res.code = 200; return res; }
-
+    CROW_ROUTE(app, "/api/health").methods("GET"_method)
+    ([](const crow::request&) {
         crow::json::wvalue body;
         body["status"] = "ok";
         body["service"] = "Auto-Doc Engine C++ Production API";
         body["security"] = "Isolated WorkDirs + POSIX Decoding + Sandbox Active";
-        res.code = 200;
-        res.body = body.dump();
-        return res;
+        return crow::response(200, body);
     });
 
     // ---- Compile + Execute ----
-    CROW_ROUTE(app, "/api/compile").methods("POST"_method, "OPTIONS"_method)
+    CROW_ROUTE(app, "/api/compile").methods("POST"_method)
     ([&baseWorkDir](const crow::request& req) {
         crow::response res;
-        res.add_header("Access-Control-Allow-Origin", "*");
-        res.add_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-        res.add_header("Access-Control-Allow-Headers", "Content-Type");
         
-        if (req.method == crow::HTTPMethod::Options) { res.code = 200; return res; }
-        
-        if (req.method != crow::HTTPMethod::Post) {
-            res.code = 405;
-            res.body = "Method Not Allowed";
-            return res;
-        }
-
         auto body = crow::json::load(req.body);
         if (!body) {
             res.code = 400;
