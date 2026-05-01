@@ -128,10 +128,6 @@ int main() {
         return 1;
     }
 
-    // ---- Root route (Railway health check) ----
-    CROW_ROUTE(app, "/").methods("GET"_method)([]() {
-        return crow::response(200, "OK");
-    });
 
     // ---- Health check ----
     CROW_ROUTE(app, "/api/health").methods("GET"_method, "OPTIONS"_method)
