@@ -125,6 +125,12 @@ int main() {
     std::error_code ec;
     fs::create_directories(baseWorkDir, ec);
 
+    // ---- Root Handler ----
+    CROW_ROUTE(app, "/")
+    ([]() {
+        return crow::response(200, "Auto-Doc Engine Root OK");
+    });
+
     // ---- Health Check ----
     CROW_ROUTE(app, "/api/health").methods("GET"_method, "OPTIONS"_method)
     ([](const crow::request& req) {
@@ -150,9 +156,19 @@ int main() {
         res.add_header("Access-Control-Allow-Headers", "Content-Type");
         
         if (req.method == crow::HTTPMethod::Options) { res.code = 204; return res; }
+        
+        if (req.method != crow::HTTPMethod::Post) {
+            res.code = 405;
+            res.body = "Method Not Allowed";
+            return res;
+        }
 
         auto body = crow::json::load(req.body);
-        if (!body) return crow::response(400, "Invalid JSON");
+        if (!body) {
+            res.code = 400;
+            res.body = "Invalid JSON";
+            return res;
+        }
 
         // RULE: Each request gets a unique folder to prevent concurrent overwrites.
         std::string requestId = generateRobustId();
